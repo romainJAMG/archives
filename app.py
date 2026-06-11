@@ -59,7 +59,7 @@ def load_data():
         except Exception:
             return []
 
-    NOT_ORGS = {"tiers monde", "zaire", "zaïre"}
+    NOT_ORGS = {"tiers monde", "zaire", "zaïre", "urss", "soviétiques", "sovietiques"}
 
     def clean_orgs(lst):
         return [x for x in lst if x.lower().strip() not in NOT_ORGS]
