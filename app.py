@@ -59,9 +59,14 @@ def load_data():
         except Exception:
             return []
 
+    NOT_ORGS = {"tiers monde", "zaire", "zaïre"}
+
+    def clean_orgs(lst):
+        return [x for x in lst if x.lower().strip() not in NOT_ORGS]
+
     df["pays"]          = df["pays"].apply(parse_list)
     df["personnalites"] = df["personnalites"].apply(parse_list)
-    df["entreprises"]   = df["entreprises"].apply(parse_list)
+    df["entreprises"]   = df["entreprises"].apply(parse_list).apply(clean_orgs)
 
     df["annee"] = pd.to_numeric(df["annee"], errors="coerce").astype("Int64")
 
