@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import re
 from collections import Counter
 
 st.set_page_config(
@@ -42,7 +43,6 @@ st.markdown("""
 
 
 # ── Chargement des données ─────────────────────────────────────────────────────
-# @st.cache_resource évite la sérialisation Arrow qui corrompt les colonnes de listes
 @st.cache_resource
 def load_data():
     try:
@@ -63,12 +63,13 @@ def load_data():
     df["personnalites"] = df["personnalites"].apply(parse_list)
     df["entreprises"]   = df["entreprises"].apply(parse_list)
 
-    # annee en entier nullable (NaN conservé, float éliminé)
     df["annee"] = pd.to_numeric(df["annee"], errors="coerce").astype("Int64")
 
     df["categorie"] = df["categorie"].fillna("Autre")
     df["categorie"] = df["categorie"].replace({"Société": "Societe"})
     df["categorie"] = df["categorie"].where(df["categorie"].isin(CAT_COLORS), "Autre")
+
+    df["auteur"] = df["auteur"].fillna("").astype(str).str.strip()
 
     return df
 
@@ -90,7 +91,6 @@ def pill(text, color):
 
 
 def pill_sm(text, color):
-    """Version compacte pour les cartes du dashboard (top 10)."""
     return (
         f'<span style="background:{color};color:#fff;padding:1px 6px;'
         f'border-radius:10px;font-size:10px;margin:1px;'
@@ -99,7 +99,6 @@ def pill_sm(text, color):
 
 
 def tag_section(items, color, height_px=90):
-    """Bloc scrollable de pills compactes, hauteur fixe."""
     if not items:
         return f'<div style="height:{height_px}px;"><span style="color:#aaa;font-size:10px;">—</span></div>'
     pills = "".join(pill_sm(p, color) for p in items)
@@ -128,8 +127,99 @@ def mini_bars(cat_counts, total):
     return "".join(rows)
 
 
+def format_content(text):
+    """Normalise le texte OCR en paragraphes HTML propres.
+
+    Stratégie : les doubles sauts de ligne marquent les vrais paragraphes ;
+    les sauts simples (coupures OCR en milieu de phrase) sont fusionnés
+    en espaces.
+    """
+    if not text or not str(text).strip():
+        return ""
+    text = str(text)
+    text = re.sub(r'[ \t]+', ' ', text)          # espaces multiples → un seul
+    text = re.sub(r'\n{2,}', '\x00', text)        # double NL → marqueur para
+    text = re.sub(r'\n', ' ', text)               # NL simple (OCR) → espace
+    paragraphs = [p.strip() for p in text.split('\x00') if p.strip()]
+    if not paragraphs:
+        return ""
+    return "".join(
+        f'<p style="margin:0 0 1.2em 0;text-align:justify;'
+        f'text-indent:1.8em;line-height:1.85;">{p}</p>'
+        for p in paragraphs
+    )
+
+
+def article_card(row, key_prefix="art"):
+    """Rendu d'une carte article (Vue 2 et Vue auteur)."""
+    cat = row["categorie"]
+    clr = CAT_COLORS.get(cat, CAT_COLORS["Autre"])
+
+    tags  = pill(cat, clr)
+    tags += "".join(pill(p, PAYS_COLOR)  for p in row["pays"][:3])
+    tags += "".join(pill(p, PERSO_COLOR) for p in row["personnalites"][:2])
+    tags += "".join(pill(p, ORG_COLOR)   for p in row["entreprises"][:1])
+
+    meta_parts = []
+    if row.get("auteur") and row["auteur"] not in ("", "nan"):
+        meta_parts.append(row["auteur"])
+    if pd.notna(row.get("publish_date")) and str(row.get("publish_date")).strip() not in ("", "nan"):
+        meta_parts.append(str(row["publish_date"]))
+    meta_html = (
+        f'<div style="color:#888;font-size:12px;margin:5px 0 10px;">'
+        f'{" · ".join(meta_parts)}</div>'
+    ) if meta_parts else "<div style='margin-bottom:10px;'></div>"
+
+    chapeau = str(row.get("chapeau", "") or "").strip()
+    if chapeau and chapeau != "nan":
+        excerpt_src = chapeau
+    else:
+        contenu = str(row.get("contenu", "") or "").strip()
+        excerpt_src = re.sub(r'\s+', ' ', contenu)
+    excerpt = (excerpt_src[:230] + "…") if len(excerpt_src) > 230 else excerpt_src
+    excerpt_html = (
+        f'<div style="color:#4a4a4a;font-size:13px;font-style:italic;'
+        f'line-height:1.6;margin-top:2px;">{excerpt}</div>'
+    ) if excerpt else ""
+
+    with st.container():
+        st.markdown(f"""
+        <div style="background:#fff;
+                    border:1px solid #e0e0e0;
+                    border-left:4px solid {clr};
+                    border-radius:0 8px 8px 0;
+                    padding:18px 22px 16px;">
+          <div style="margin-bottom:10px;">{tags}</div>
+          <div style="font-size:17px;font-weight:700;color:#1E3A5F;
+                      line-height:1.35;margin-bottom:2px;">{row['titre']}</div>
+          {meta_html}
+          {excerpt_html}
+        </div>
+        """, unsafe_allow_html=True)
+
+        _, btn_col = st.columns([9, 3])
+        with btn_col:
+            if st.button("Lire l'article →", key=f"{key_prefix}_{row['article_id']}", use_container_width=True):
+                st.session_state.article_selectionne = row["article_id"]
+                st.rerun()
+
+    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+
+
 # ── Vue 1 : Dashboard ──────────────────────────────────────────────────────────
 def render_dashboard(df):
+    # Barre de navigation principale
+    nav_col1, nav_col2, _ = st.columns([2, 2, 8])
+    with nav_col1:
+        if st.button("📅  Par année", key="nav_annee", use_container_width=True):
+            st.session_state.vue = "dashboard"
+            st.rerun()
+    with nav_col2:
+        if st.button("✍️  Par auteur", key="nav_auteur", use_container_width=True):
+            st.session_state.vue = "auteurs"
+            st.rerun()
+
+    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
     st.markdown("# Archives Jeune Afrique — Décennie 1980")
     st.markdown(
         '<p style="color:#666;font-size:14px;margin-top:-12px;margin-bottom:24px;">'
@@ -209,7 +299,7 @@ def render_year(df, year):
     if search.strip():
         mask = (
             ydf["titre"].str.contains(search, case=False, na=False) |
-            ydf["auteur"].astype(str).str.contains(search, case=False, na=False)
+            ydf["auteur"].str.contains(search, case=False, na=False)
         )
         ydf = ydf[mask]
         st.caption(f"{len(ydf)} résultat(s) pour « {search} »")
@@ -217,39 +307,65 @@ def render_year(df, year):
     st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
     for _, row in ydf.iterrows():
-        cat = row["categorie"]
-        clr = CAT_COLORS.get(cat, CAT_COLORS["Autre"])
+        article_card(row, key_prefix=f"y{year}")
 
-        # Tags (catégorie + jusqu'à 3 pays + 2 perso + 1 org)
-        tags  = pill(cat, clr)
-        tags += "".join(pill(p, PAYS_COLOR)  for p in row["pays"][:3])
-        tags += "".join(pill(p, PERSO_COLOR) for p in row["personnalites"][:2])
-        tags += "".join(pill(p, ORG_COLOR)   for p in row["entreprises"][:1])
 
-        # Auteur · date
-        meta_parts = []
-        if pd.notna(row.get("auteur")) and str(row.get("auteur")).strip() not in ("", "nan"):
-            meta_parts.append(str(row["auteur"]))
-        if pd.notna(row.get("publish_date")) and str(row.get("publish_date")).strip() not in ("", "nan"):
-            meta_parts.append(str(row["publish_date"]))
-        meta_html = (
-            f'<div style="color:#888;font-size:12px;margin:5px 0 10px;">'
-            f'{" · ".join(meta_parts)}</div>'
-        ) if meta_parts else "<div style='margin-bottom:10px;'></div>"
+# ── Vue auteurs : liste de tous les auteurs ────────────────────────────────────
+def render_authors_list(df):
+    col_back, col_title = st.columns([1, 9])
 
-        # Extrait : chapeau prioritaire, sinon début du contenu
-        excerpt_src = ""
-        chapeau = str(row.get("chapeau", "") or "").strip()
-        if chapeau and chapeau != "nan":
-            excerpt_src = chapeau
-        else:
-            contenu = str(row.get("contenu", "") or "").strip()
-            excerpt_src = contenu.replace("\n", " ")
-        excerpt = (excerpt_src[:230] + "…") if len(excerpt_src) > 230 else excerpt_src
-        excerpt_html = (
-            f'<div style="color:#4a4a4a;font-size:13px;font-style:italic;'
-            f'line-height:1.6;margin-top:2px;">{excerpt}</div>'
-        ) if excerpt else ""
+    with col_back:
+        st.markdown("<div style='margin-top:6px;'></div>", unsafe_allow_html=True)
+        if st.button("← Retour", key="back_dash_aut"):
+            st.session_state.vue = "dashboard"
+            st.rerun()
+
+    with col_title:
+        st.markdown("## Articles par auteur")
+
+    # Exclure les articles sans auteur identifié
+    adf = df[df["auteur"].str.len() > 0].copy()
+
+    search = st.text_input(
+        "Recherche auteur",
+        placeholder="Filtrer par nom d'auteur…",
+        label_visibility="collapsed",
+    )
+
+    # Calcul des stats par auteur
+    stats = []
+    for auteur, grp in adf.groupby("auteur"):
+        annees = sorted(grp["annee"].dropna().unique().tolist())
+        cat_counts = {c: int((grp["categorie"] == c).sum()) for c in CAT_COLORS}
+        dominant_cat = max(cat_counts, key=cat_counts.get)
+        stats.append({
+            "auteur":       auteur,
+            "n":            len(grp),
+            "annee_min":    annees[0]  if annees else "",
+            "annee_max":    annees[-1] if annees else "",
+            "cat_counts":   cat_counts,
+            "dominant_cat": dominant_cat,
+        })
+
+    stats.sort(key=lambda x: x["n"], reverse=True)
+
+    if search.strip():
+        stats = [s for s in stats if search.lower() in s["auteur"].lower()]
+
+    st.caption(f"{len(stats)} auteur(s) trouvé(s)")
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+    for s in stats:
+        clr = CAT_COLORS.get(s["dominant_cat"], CAT_COLORS["Autre"])
+        annee_range = (
+            str(s["annee_min"]) if s["annee_min"] == s["annee_max"]
+            else f"{s['annee_min']} – {s['annee_max']}"
+        )
+        cat_pills = "".join(
+            pill_sm(cat, CAT_COLORS[cat])
+            for cat, cnt in sorted(s["cat_counts"].items(), key=lambda x: -x[1])
+            if cnt > 0
+        )
 
         with st.container():
             st.markdown(f"""
@@ -257,26 +373,61 @@ def render_year(df, year):
                         border:1px solid #e0e0e0;
                         border-left:4px solid {clr};
                         border-radius:0 8px 8px 0;
-                        padding:18px 22px 16px;">
-              <div style="margin-bottom:10px;">{tags}</div>
-              <div style="font-size:17px;font-weight:700;color:#1E3A5F;
-                          line-height:1.35;margin-bottom:2px;">{row['titre']}</div>
-              {meta_html}
-              {excerpt_html}
+                        padding:14px 22px 12px;">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                <span style="font-size:16px;font-weight:700;color:#1E3A5F;">{s['auteur']}</span>
+                <span style="font-size:13px;color:#888;">{s['n']} article{'s' if s['n']>1 else ''}</span>
+              </div>
+              <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <span style="color:#888;font-size:12px;">📅 {annee_range}</span>
+                <span>{cat_pills}</span>
+              </div>
             </div>
             """, unsafe_allow_html=True)
 
             _, btn_col = st.columns([9, 3])
             with btn_col:
-                if st.button("Lire l'article →", key=f"art_{row['article_id']}", use_container_width=True):
-                    st.session_state.article_selectionne = row["article_id"]
+                if st.button("Voir les articles →", key=f"aut_{s['auteur']}", use_container_width=True):
+                    st.session_state.auteur_selectionne = s["auteur"]
                     st.rerun()
 
-        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+
+# ── Vue auteur : liste des articles d'un auteur ───────────────────────────────
+def render_author_articles(df, auteur):
+    col_back, col_title = st.columns([1, 9])
+
+    with col_back:
+        st.markdown("<div style='margin-top:6px;'></div>", unsafe_allow_html=True)
+        if st.button("← Retour", key="back_aut_list"):
+            st.session_state.auteur_selectionne = None
+            st.rerun()
+
+    adf = df[df["auteur"] == auteur].copy()
+    adf = adf.sort_values("annee", na_position="last")
+
+    with col_title:
+        st.markdown(f"## {auteur} — {len(adf)} article{'s' if len(adf)>1 else ''}")
+
+    search = st.text_input(
+        "Recherche",
+        placeholder="Filtrer par titre…",
+        label_visibility="collapsed",
+    )
+
+    if search.strip():
+        adf = adf[adf["titre"].str.contains(search, case=False, na=False)]
+        st.caption(f"{len(adf)} résultat(s) pour « {search} »")
+
+    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+
+    for _, row in adf.iterrows():
+        article_card(row, key_prefix=f"a_{auteur[:8]}")
 
 
 # ── Vue 3 : Détail article ─────────────────────────────────────────────────────
-def render_article(df, article_id, year):
+def render_article(df, article_id):
     match = df[df["article_id"] == article_id]
     if match.empty:
         st.error("Article introuvable.")
@@ -285,12 +436,21 @@ def render_article(df, article_id, year):
             st.rerun()
         return
 
-    row = match.iloc[0]
-    cat = row["categorie"]
-    clr = CAT_COLORS.get(cat, CAT_COLORS["Autre"])
+    row  = match.iloc[0]
+    cat  = row["categorie"]
+    clr  = CAT_COLORS.get(cat, CAT_COLORS["Autre"])
+    year = st.session_state.annee_selectionnee
+    aut  = st.session_state.auteur_selectionne
 
-    # ── Navigation ──────────────────────────────────────────────────────────────
-    if st.button(f"← Retour à {year}", key="back_year"):
+    # ── Navigation retour contextuelle ──────────────────────────────────────────
+    if aut:
+        retour_label = f"← Retour à {aut}"
+    elif year:
+        retour_label = f"← Retour à {year}"
+    else:
+        retour_label = "← Retour"
+
+    if st.button(retour_label, key="back_article"):
         st.session_state.article_selectionne = None
         st.rerun()
 
@@ -309,6 +469,9 @@ def render_article(df, article_id, year):
     )
     top_right = " &nbsp;·&nbsp; ".join(x for x in [source_html, page_html] if x)
 
+    auteur_str = row.get("auteur", "") or ""
+    date_str   = str(row.get("publish_date", "") or "").strip()
+
     st.markdown(f"""
     <div style="border-left:5px solid {clr};padding:20px 28px 18px;
                 background:#fafafa;border-radius:0 10px 10px 0;margin-bottom:20px;">
@@ -322,35 +485,35 @@ def render_article(df, article_id, year):
         {row['titre']}
       </h1>
       <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
-        {"<span style='font-weight:600;color:#333;font-size:14px;'>" + str(row['auteur']) + "</span>" if pd.notna(row.get("auteur")) and str(row.get("auteur")).strip() not in ("","nan") else ""}
-        {"<span style='color:#aaa;font-size:13px;'>" + str(row['publish_date']) + "</span>" if pd.notna(row.get("publish_date")) and str(row.get("publish_date")).strip() not in ("","nan") else ""}
+        {"<span style='font-weight:600;color:#333;font-size:14px;'>" + auteur_str + "</span>" if auteur_str and auteur_str != "nan" else ""}
+        {"<span style='color:#aaa;font-size:13px;'>" + date_str + "</span>" if date_str and date_str != "nan" else ""}
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Entités (groupées par type) ──────────────────────────────────────────────
+    # ── Entités groupées ─────────────────────────────────────────────────────────
     rows_entities = []
     if row["pays"]:
         rows_entities.append(
-            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
-            f'<span style="font-size:11px;color:#999;text-transform:uppercase;'
-            f'letter-spacing:.5px;min-width:90px;">Pays</span>'
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
+            '<span style="font-size:11px;color:#999;text-transform:uppercase;'
+            'letter-spacing:.5px;min-width:90px;">Pays</span>'
             + "".join(pill(p, PAYS_COLOR) for p in row["pays"])
             + "</div>"
         )
     if row["personnalites"]:
         rows_entities.append(
-            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
-            f'<span style="font-size:11px;color:#999;text-transform:uppercase;'
-            f'letter-spacing:.5px;min-width:90px;">Personnalités</span>'
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
+            '<span style="font-size:11px;color:#999;text-transform:uppercase;'
+            'letter-spacing:.5px;min-width:90px;">Personnalités</span>'
             + "".join(pill(p, PERSO_COLOR) for p in row["personnalites"])
             + "</div>"
         )
     if row["entreprises"]:
         rows_entities.append(
-            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
-            f'<span style="font-size:11px;color:#999;text-transform:uppercase;'
-            f'letter-spacing:.5px;min-width:90px;">Organisations</span>'
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
+            '<span style="font-size:11px;color:#999;text-transform:uppercase;'
+            'letter-spacing:.5px;min-width:90px;">Organisations</span>'
             + "".join(pill(p, ORG_COLOR) for p in row["entreprises"])
             + "</div>"
         )
@@ -378,18 +541,7 @@ def render_article(df, article_id, year):
     # ── Contenu ──────────────────────────────────────────────────────────────────
     contenu = row.get("contenu", "")
     if pd.notna(contenu) and str(contenu).strip():
-        raw_lines = str(contenu).split("\n")
-        paragraphs = []
-        for line in raw_lines:
-            line = line.strip()
-            if line:
-                paragraphs.append(
-                    f'<p style="margin:0 0 1.2em 0;text-align:justify;'
-                    f'text-indent:1.8em;line-height:1.85;">{line}</p>'
-                )
-            else:
-                paragraphs.append('<div style="margin-bottom:0.5em;"></div>')
-        body = "".join(paragraphs)
+        body = format_content(str(contenu))
         st.markdown(
             f'<div style="max-width:760px;padding:8px 4px 32px;'
             f'font-family:Georgia,serif;font-size:15.5px;color:#1a1a1a;">'
@@ -403,17 +555,21 @@ def render_article(df, article_id, year):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
-    if "annee_selectionnee" not in st.session_state:
-        st.session_state.annee_selectionnee = None
-    if "article_selectionne" not in st.session_state:
-        st.session_state.article_selectionne = None
+    if "vue"                not in st.session_state: st.session_state.vue                = "dashboard"
+    if "annee_selectionnee" not in st.session_state: st.session_state.annee_selectionnee = None
+    if "auteur_selectionne" not in st.session_state: st.session_state.auteur_selectionne = None
+    if "article_selectionne" not in st.session_state: st.session_state.article_selectionne = None
 
     df = load_data()
 
     if st.session_state.article_selectionne:
-        render_article(df, st.session_state.article_selectionne, st.session_state.annee_selectionnee)
+        render_article(df, st.session_state.article_selectionne)
+    elif st.session_state.auteur_selectionne:
+        render_author_articles(df, st.session_state.auteur_selectionne)
     elif st.session_state.annee_selectionnee:
         render_year(df, st.session_state.annee_selectionnee)
+    elif st.session_state.vue == "auteurs":
+        render_authors_list(df)
     else:
         render_dashboard(df)
 
