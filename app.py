@@ -5,7 +5,7 @@ import re
 from collections import Counter
 
 st.set_page_config(
-    page_title="Archives Jeune Afrique 1980-1989",
+    page_title="Archives Jeune Afrique 1960-1969 & 1980-1989",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -76,6 +76,9 @@ def load_data():
 
     df["auteur"] = df["auteur"].fillna("").astype(str).str.strip()
 
+    # Exclure les articles hors décennies cibles
+    df = df[df["annee"].isin(list(range(1960, 1970)) + list(range(1980, 1990)))]
+
     return df
 
 
@@ -133,18 +136,12 @@ def mini_bars(cat_counts, total):
 
 
 def format_content(text):
-    """Normalise le texte OCR en paragraphes HTML propres.
-
-    Stratégie : les doubles sauts de ligne marquent les vrais paragraphes ;
-    les sauts simples (coupures OCR en milieu de phrase) sont fusionnés
-    en espaces.
-    """
     if not text or not str(text).strip():
         return ""
     text = str(text)
-    text = re.sub(r'[ \t]+', ' ', text)          # espaces multiples → un seul
-    text = re.sub(r'\n{2,}', '\x00', text)        # double NL → marqueur para
-    text = re.sub(r'\n', ' ', text)               # NL simple (OCR) → espace
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{2,}', '\x00', text)
+    text = re.sub(r'\n', ' ', text)
     paragraphs = [p.strip() for p in text.split('\x00') if p.strip()]
     if not paragraphs:
         return ""
@@ -156,7 +153,6 @@ def format_content(text):
 
 
 def article_card(row, key_prefix="art"):
-    """Rendu d'une carte article (Vue 2 et Vue auteur)."""
     cat = row["categorie"]
     clr = CAT_COLORS.get(cat, CAT_COLORS["Autre"])
 
@@ -211,28 +207,14 @@ def article_card(row, key_prefix="art"):
     st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
 
 
-# ── Vue 1 : Dashboard ──────────────────────────────────────────────────────────
-def render_dashboard(df):
-    # Barre de navigation principale
-    nav_col1, nav_col2, _ = st.columns([2, 2, 8])
-    with nav_col1:
-        if st.button("📅  Par année", key="nav_annee", use_container_width=True):
-            st.session_state.vue = "dashboard"
-            st.rerun()
-    with nav_col2:
-        if st.button("✍️  Par auteur", key="nav_auteur", use_container_width=True):
-            st.session_state.vue = "auteurs"
-            st.rerun()
-
-    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
-    st.markdown("# Archives Jeune Afrique — Décennie 1980")
+def render_decade_grid(df, decade_start, decade_label):
     st.markdown(
-        '<p style="color:#666;font-size:14px;margin-top:-12px;margin-bottom:24px;">'
-        'Sélectionnez une année pour explorer les articles.</p>',
+        f'<h2 style="color:#1E3A5F;font-family:Georgia,serif;margin-top:8px;">'
+        f'Décennie {decade_label}</h2>',
         unsafe_allow_html=True,
     )
 
-    for row_start in (1980, 1985):
+    for row_start in (decade_start, decade_start + 5):
         cols = st.columns(5, gap="small")
         for i, year in enumerate(range(row_start, row_start + 5)):
             ydf = df[df["annee"] == year]
@@ -277,6 +259,31 @@ def render_dashboard(df):
                     st.rerun()
 
         st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+
+
+# ── Vue 1 : Dashboard ──────────────────────────────────────────────────────────
+def render_dashboard(df):
+    nav_col1, nav_col2, _ = st.columns([2, 2, 8])
+    with nav_col1:
+        if st.button("📅  Par année", key="nav_annee", use_container_width=True):
+            st.session_state.vue = "dashboard"
+            st.rerun()
+    with nav_col2:
+        if st.button("✍️  Par auteur", key="nav_auteur", use_container_width=True):
+            st.session_state.vue = "auteurs"
+            st.rerun()
+
+    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+    st.markdown("# Archives Jeune Afrique — 1960-1969 & 1980-1989")
+    st.markdown(
+        '<p style="color:#666;font-size:14px;margin-top:-12px;margin-bottom:24px;">'
+        f'Sélectionnez une année pour explorer les articles. {len(df):,} articles au total.</p>'.replace(",", " "),
+        unsafe_allow_html=True,
+    )
+
+    render_decade_grid(df, 1960, "1960")
+    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+    render_decade_grid(df, 1980, "1980")
 
 
 # ── Vue 2 : Liste des articles d'une année ────────────────────────────────────
@@ -328,7 +335,6 @@ def render_authors_list(df):
     with col_title:
         st.markdown("## Articles par auteur")
 
-    # Exclure les articles sans auteur identifié
     adf = df[df["auteur"].str.len() > 0].copy()
 
     search = st.text_input(
@@ -337,7 +343,6 @@ def render_authors_list(df):
         label_visibility="collapsed",
     )
 
-    # Calcul des stats par auteur
     stats = []
     for auteur, grp in adf.groupby("auteur"):
         annees = sorted(grp["annee"].dropna().unique().tolist())
@@ -447,7 +452,6 @@ def render_article(df, article_id):
     year = st.session_state.annee_selectionnee
     aut  = st.session_state.auteur_selectionne
 
-    # ── Navigation retour contextuelle ──────────────────────────────────────────
     if aut:
         retour_label = f"← Retour à {aut}"
     elif year:
@@ -461,7 +465,6 @@ def render_article(df, article_id):
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
-    # ── En-tête article ─────────────────────────────────────────────────────────
     source = str(row.get("source_pdf", "") or "").strip()
     source_html = (
         f'<span style="color:#999;font-size:12px;font-style:italic;">{source}</span>'
@@ -496,7 +499,6 @@ def render_article(df, article_id):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Entités groupées ─────────────────────────────────────────────────────────
     rows_entities = []
     if row["pays"]:
         rows_entities.append(
@@ -531,7 +533,6 @@ def render_article(df, article_id):
             unsafe_allow_html=True,
         )
 
-    # ── Chapeau ──────────────────────────────────────────────────────────────────
     chapeau = str(row.get("chapeau", "") or "").strip()
     if chapeau and chapeau != "nan":
         st.markdown(
@@ -543,7 +544,6 @@ def render_article(df, article_id):
             unsafe_allow_html=True,
         )
 
-    # ── Contenu ──────────────────────────────────────────────────────────────────
     contenu = row.get("contenu", "")
     if pd.notna(contenu) and str(contenu).strip():
         body = format_content(str(contenu))
