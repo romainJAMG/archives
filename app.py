@@ -5,7 +5,7 @@ import re
 from collections import Counter
 
 st.set_page_config(
-    page_title="Archives Jeune Afrique 1960-1969 & 1980-1989",
+    page_title="Archives Jeune Afrique 1960-1999",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -45,10 +45,7 @@ st.markdown("""
 # ── Chargement des données ─────────────────────────────────────────────────────
 @st.cache_resource
 def load_data():
-    try:
-        df = pd.read_csv("articles_final_v.csv", encoding="utf-8")
-    except UnicodeDecodeError:
-        df = pd.read_csv("articles_final_v.csv", encoding="latin-1")
+    df = pd.read_parquet("articles_final_v.parquet")
 
     def parse_list(val):
         if pd.isna(val) or str(val).strip() in ("", "[]", "null"):
@@ -77,7 +74,7 @@ def load_data():
     df["auteur"] = df["auteur"].fillna("").astype(str).str.strip()
 
     # Exclure les articles hors décennies cibles
-    df = df[df["annee"].isin(list(range(1960, 1970)) + list(range(1980, 1990)))]
+    df = df[df["annee"].isin(list(range(1960, 2000)))]
 
     return df
 
@@ -274,7 +271,7 @@ def render_dashboard(df):
             st.rerun()
 
     st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
-    st.markdown("# Archives Jeune Afrique — 1960-1969 & 1980-1989")
+    st.markdown("# Archives Jeune Afrique — 1960-1999")
     st.markdown(
         '<p style="color:#666;font-size:14px;margin-top:-12px;margin-bottom:24px;">'
         f'Sélectionnez une année pour explorer les articles. {len(df):,} articles au total.</p>'.replace(",", " "),
@@ -283,7 +280,11 @@ def render_dashboard(df):
 
     render_decade_grid(df, 1960, "1960")
     st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+    render_decade_grid(df, 1970, "1970")
+    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
     render_decade_grid(df, 1980, "1980")
+    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+    render_decade_grid(df, 1990, "1990")
 
 
 # ── Vue 2 : Liste des articles d'une année ────────────────────────────────────
