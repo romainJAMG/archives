@@ -72,8 +72,8 @@ def log_feedback(article_id, titre, annee, categorie, action, commentaire=""):
             action,
             commentaire,
         ])
-    except Exception:
-        pass  # ne jamais bloquer l'app si le log échoue
+    except Exception as e:
+        st.error(f"Erreur log Google Sheet : {e}")
 
 
 # ── Chargement des données ─────────────────────────────────────────────────────
