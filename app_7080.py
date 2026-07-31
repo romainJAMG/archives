@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import re
 from collections import Counter
+from datetime import datetime
 
 st.set_page_config(
     page_title="Archives Jeune Afrique 1970-1989",
@@ -40,6 +41,39 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ── Google Sheets feedback ────────────────────────────────────────────────────
+@st.cache_resource
+def get_gsheet():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=[
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive",
+        ],
+    )
+    client = gspread.authorize(creds)
+    sheet  = client.open_by_key(st.secrets["gsheet"]["spreadsheet_id"])
+    return sheet.worksheet(st.secrets["gsheet"]["worksheet_name"])
+
+
+def log_feedback(article_id, titre, annee, categorie, action, commentaire=""):
+    try:
+        ws = get_gsheet()
+        ws.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(article_id),
+            str(titre),
+            str(annee),
+            str(categorie),
+            action,
+            commentaire,
+        ])
+    except Exception:
+        pass  # ne jamais bloquer l'app si le log échoue
 
 
 # ── Chargement des données ─────────────────────────────────────────────────────
@@ -553,6 +587,42 @@ def render_article(df, article_id):
         )
     else:
         st.info("Contenu non disponible.")
+
+    # ── Bloc feedback testeurs ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Votre avis sur cet article**")
+
+    vote_key = f"vote_{article_id}"
+    if vote_key not in st.session_state:
+        st.session_state[vote_key] = None
+
+    if st.session_state[vote_key] is None:
+        col_like, col_dislike, _ = st.columns([1, 1, 8])
+        with col_like:
+            if st.button("👍  Utile", key=f"like_{article_id}", use_container_width=True):
+                log_feedback(article_id, row["titre"], row["annee"], cat, "like")
+                st.session_state[vote_key] = "like"
+                st.rerun()
+        with col_dislike:
+            if st.button("👎  Pas utile", key=f"dislike_{article_id}", use_container_width=True):
+                log_feedback(article_id, row["titre"], row["annee"], cat, "dislike")
+                st.session_state[vote_key] = "dislike"
+                st.rerun()
+    else:
+        label = "👍 Utile" if st.session_state[vote_key] == "like" else "👎 Pas utile"
+        st.success(f"Vote enregistré : {label}")
+
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    commentaire = st.text_area(
+        "Commentaire",
+        placeholder="Laissez un commentaire sur cet article… (optionnel)",
+        label_visibility="collapsed",
+        key=f"comment_input_{article_id}",
+    )
+    if st.button("Envoyer le commentaire", key=f"comment_submit_{article_id}"):
+        if commentaire.strip():
+            log_feedback(article_id, row["titre"], row["annee"], cat, "comment", commentaire.strip())
+            st.success("Commentaire envoyé, merci !")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
