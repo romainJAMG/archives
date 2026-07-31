@@ -73,7 +73,7 @@ def log_feedback(article_id, titre, annee, categorie, action, commentaire=""):
             commentaire,
         ])
     except Exception as e:
-        st.error(f"Erreur log Google Sheet : {e}")
+        st.error(f"Erreur log Google Sheet : {type(e).__name__} — {repr(e)}")
 
 
 # ── Chargement des données ─────────────────────────────────────────────────────
